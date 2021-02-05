@@ -1,0 +1,413 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: S3 bucket name for cloud formation
+    Default: ""
+    MaxLength: 50
+    ConstraintDescription: "for cloud formation template and lambda zip"
+  Account:
+    Type: String
+    Description: Account numbers for cloud formation
+    Default: ""
+    MaxLength: 12
+    ConstraintDescription: "for cloud formation template and lambda zip"
+    
+Resources:
+  SourceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName : !Sub 'workshop-timeseries-retail-${Account}-source'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+  SharedLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AmazonForecastFullAccess
+      - arn:aws:iam::aws:policy/AdministratorAccess
+  BucketsFullAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - s3:Get*
+          - s3:PutObject
+          - s3:DeleteObject
+          - s3:List*
+          Resource:
+          - Fn::GetAtt:
+            - SourceBucket
+            - Arn
+          - Fn::Sub: ${SourceBucket.Arn}/*
+  ForecastRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: forecast.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - Ref: BucketsFullAccessPolicy
+  StepFunctionsXRayAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - xray:PutTraceSegments
+          - xray:PutTelemetryRecords
+          - xray:GetSamplingRules
+          - xray:GetSamplingTargets
+          Resource: '*'
+  CloudWatchLogsDeliveryFullAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - logs:CreateLogDelivery
+          - logs:GetLogDelivery
+          - logs:UpdateLogDelivery
+          - logs:DeleteLogDelivery
+          - logs:ListLogDeliveries
+          - logs:PutResourcePolicy
+          - logs:DescribeResourcePolicies
+          - logs:DescribeLogGroups
+          Resource: '*'
+  SageMakerNotebookRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - sagemaker.amazonaws.com
+            - forecast.amazonaws.com
+            - lambda.amazonaws.com
+            - events.amazonaws.com
+            - states.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AmazonSageMakerFullAccess
+      - Ref: BucketsFullAccessPolicy
+      - arn:aws:iam::aws:policy/AWSLambdaFullAccess
+      - arn:aws:iam::aws:policy/IAMFullAccess
+      - arn:aws:iam::aws:policy/AWSStepFunctionsFullAccess
+      - arn:aws:iam::aws:policy/CloudWatchEventsFullAccess
+      - arn:aws:iam::aws:policy/AmazonForecastFullAccess
+      - arn:aws:iam::aws:policy/AWSCloudFormationFullAccess
+      - arn:aws:iam::aws:policy/AWSCloudTrailFullAccess
+  NotebookConfig:
+    Type: AWS::SageMaker::NotebookInstanceLifecycleConfig
+    Properties:
+      OnStart:
+      - Content:
+          Fn::Base64:
+            Fn::Sub: '#!/bin/bash
+
+              set -e
+
+
+              # Install extension for ipywidgets interactivity:
+
+              sudo -u ec2-user -i <<''EOF''
+
+              source /home/ec2-user/anaconda3/bin/activate JupyterSystemEnv
+
+              jupyter labextension install @jupyter-widgets/jupyterlab-manager
+
+              source /home/ec2-user/anaconda3/bin/deactivate
+
+              EOF
+
+
+              # Pass Forecast role ARN and bucket name in to the notebook via env
+              vars:
+
+              touch /etc/profile.d/jupyter-env.sh
+
+              cat << ''EOF'' >> /etc/profile.d/jupyter-env.sh
+
+              export FORECAST_IAM_ROLE_ARN=''${ForecastRole.Arn}''
+
+              export DATA_BUCKET_NAME=''${SourceBucket}''
+
+              EOF
+
+              initctl restart jupyter-server --no-wait
+
+              '
+  NotebookInstance:
+    Type: AWS::SageMaker::NotebookInstance
+    Properties:
+      InstanceType: ml.t2.medium
+      LifecycleConfigName:
+        Fn::GetAtt:
+        - NotebookConfig
+        - NotebookInstanceLifecycleConfigName
+      NotebookInstanceName:
+        Fn::Sub: ${AWS::StackName}-ForecastNotebook
+      RoleArn:
+        Fn::GetAtt:
+        - SageMakerNotebookRole
+        - Arn
+      DefaultCodeRepository: https://github.com/glyfnet/timeseries_blog.git
+  InputCloudTrailBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName : !Sub 'workshop-timeseries-retail-${Account}-cloudtrail'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+  LogBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: InputCloudTrailBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AWSCloudTrailAclCheck
+          Effect: Allow
+          Principal:
+            Service: cloudtrail.amazonaws.com
+          Action: s3:GetBucketAcl
+          Resource:
+            Fn::GetAtt:
+            - InputCloudTrailBucket
+            - Arn
+        - Sid: AWSCloudTrailWrite
+          Effect: Allow
+          Principal:
+            Service: cloudtrail.amazonaws.com
+          Action: s3:PutObject
+          Resource:
+            Fn::Sub: ${InputCloudTrailBucket.Arn}/*
+          Condition:
+            StringEquals:
+              s3:x-amz-acl: bucket-owner-full-control
+  RawInputTrail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn:
+    - LogBucketPolicy
+    Properties:
+      EventSelectors:
+      - DataResources:
+        - Type: AWS::S3::Object
+          Values:
+          - Fn::Sub: ${SourceBucket.Arn}/input/
+        IncludeManagementEvents: false
+        ReadWriteType: WriteOnly
+      IncludeGlobalServiceEvents: false
+      IsLogging: true
+      IsMultiRegionTrail: false
+      S3BucketName:
+        Ref: InputCloudTrailBucket
+  CreateDatasetGroupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: createdatasetgroup
+      Description: Create dataset group on Amazon Forecast
+      Handler: createdatasetgroup.lambda_handler
+      MemorySize: 256
+      Runtime: python3.7
+      Role:
+        Fn::GetAtt:
+        - SharedLambdaRole
+        - Arn
+      Timeout: 120
+      CodeUri:
+          Bucket: !Ref BucketName
+          Key: 'lambdas_deploy/createdatasetgroup.zip'
+  CreateDatasetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: createdataset
+      Description: Create dataset on Amazon Forecast
+      Handler: createdataset.lambda_handler
+      MemorySize: 256
+      Runtime: python3.7
+      Role:
+        Fn::GetAtt:
+        - SharedLambdaRole
+        - Arn
+      Timeout: 120
+      CodeUri:
+          Bucket: !Ref BucketName
+          Key: 'lambdas_deploy/createdataset.zip'
+  CreateDatasetImportFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: createdatasetimport
+      Description: Create dataset import on Amazon Forecast
+      Handler: createdatasetimport.lambda_handler
+      MemorySize: 256
+      Runtime: python3.7
+      Role:
+        Fn::GetAtt:
+        - SharedLambdaRole
+        - Arn
+      Timeout: 120
+      CodeUri:
+          Bucket: !Ref BucketName
+          Key: 'lambdas_deploy/createdatasetimport.zip'
+  GetStatusImportFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: getstatusimport
+      Description: Get status of import on Amazon Forecast
+      Handler: getstatusimport.lambda_handler
+      MemorySize: 256
+      Runtime: python3.7
+      Role:
+        Fn::GetAtt:
+        - SharedLambdaRole
+        - Arn
+      Timeout: 120
+      CodeUri:
+          Bucket: !Ref BucketName
+          Key: 'lambdas_deploy/getstatusimport.zip'
+  CreatePredictorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: createpredictor
+      Description: Create predictor on Amazon Forecast
+      Handler: createpredictor.lambda_handler
+      MemorySize: 256
+      Runtime: python3.7
+      Role:
+        Fn::GetAtt:
+        - SharedLambdaRole
+        - Arn
+      Timeout: 120
+      CodeUri:
+          Bucket: !Ref BucketName
+          Key: 'lambdas_deploy/createpredictor.zip'
+  GetStatusPredictorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: getstatuspredictor
+      Description: Get status of predictor on Amazon Forecast
+      Handler: getstatuspredictor.lambda_handler
+      MemorySize: 256
+      Runtime: python3.7
+      Role:
+        Fn::GetAtt:
+        - SharedLambdaRole
+        - Arn
+      Timeout: 120
+      CodeUri:
+          Bucket: !Ref BucketName
+          Key: 'lambdas_deploy/getstatuspredictor.zip'
+  CreateForecastFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: createforecast
+      Description: Create forecast on Amazon Forecast
+      Handler: createforecast.lambda_handler
+      MemorySize: 256
+      Runtime: python3.7
+      Role:
+        Fn::GetAtt:
+        - SharedLambdaRole
+        - Arn
+      Timeout: 120
+      CodeUri:
+          Bucket: !Ref BucketName
+          Key: 'lambdas_deploy/createforecast.zip'
+  GetStatusForecastFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: getstatusforecast
+      Description: Get status of forecast on Amazon Forecast
+      Handler: getstatusforecast.lambda_handler
+      MemorySize: 256
+      Runtime: python3.7
+      Role:
+        Fn::GetAtt:
+        - SharedLambdaRole
+        - Arn
+      Timeout: 120
+      CodeUri:
+          Bucket: !Ref BucketName
+          Key: 'lambdas_deploy/getstatusforecast.zip'
+  CreateForecastExportFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: createforecastexportjob
+      Description: Create forecast export on Amazon Forecast
+      Handler: createforecastexportjob.lambda_handler
+      MemorySize: 256
+      Runtime: python3.7
+      Role:
+        Fn::GetAtt:
+        - SharedLambdaRole
+        - Arn
+      Timeout: 120
+      CodeUri:
+          Bucket: !Ref BucketName
+          Key: 'lambdas_deploy/createforecastexportjob.zip'
+  GetStatusForecastExportFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: getstatusforecastexportjob
+      Description: Get status of forecast export on Amazon Forecast
+      Handler: getstatusforecastexportjob.lambda_handler
+      MemorySize: 256
+      Runtime: python3.7
+      Role:
+        Fn::GetAtt:
+        - SharedLambdaRole
+        - Arn
+      Timeout: 120
+      CodeUri:
+          Bucket: !Ref BucketName
+          Key: 'lambdas_deploy/getstatusforecastexportjob.zip'
+  PipelineLogGroup:
+    Type: AWS::Logs::LogGroup
+Outputs:
+  SourceBucketName:
+    Description: Bucket for input data
+    Value:
+      Ref: SourceBucket
+  NotebookInstance:
+    Description: SageMaker notebook instance
+    Value:
+      Ref: NotebookInstance
+  ForecastRoleArn:
+    Description: Execution role to use for Amazon Forecast (with access to required
+      buckets)
+    Value:
+      Fn::GetAtt:
+      - ForecastRole
+      - Arn

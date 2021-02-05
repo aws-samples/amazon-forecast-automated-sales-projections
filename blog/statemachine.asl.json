@@ -1,0 +1,137 @@
+{
+  "Comment": "Amazon Forecast example of the Amazon States Language using an AWS Lambda Function",
+  "StartAt": "StartDatasetImport",
+  "States": {
+    "StartDatasetImport": {
+      "Type": "Task",
+      "InputPath": "$",
+      "Resource": "${CreateDatasetImportFunctionArn}",
+      "ResultPath": "$",
+      "Next": "GetStatusImport"
+    },
+    "GetStatusImport": {
+      "Type": "Task",
+      "InputPath": "$",
+      "Resource": "${GetStatusImportFunctionArn}",
+      "ResultPath": "$",
+      "Next": "CheckStatusImport"
+    },
+    "CheckStatusImport": {
+      "Type": "Choice",
+      "InputPath": "$",
+      "Choices": [
+        {
+          "Variable": "$.is_active_import",
+          "BooleanEquals": true,
+          "Next": "CreatePredictor"
+        }
+      ],
+      "Default": "SleepCheckStatusImport"
+    },
+    "SleepCheckStatusImport": {
+      "Type": "Wait",
+      "Seconds": 300,
+      "Next": "GetStatusImport"
+    },
+    "CreatePredictor": {
+      "Type": "Task",
+      "InputPath": "$",
+      "Resource": "${CreatePredictorFunctionArn}",
+      "ResultPath": "$",
+      "Next": "GetStatusPredictor"
+    },
+    "GetStatusPredictor": {
+      "Type": "Task",
+      "InputPath": "$",
+      "Resource": "${GetStatusPredictorFunctionArn}",
+      "ResultPath": "$",
+      "Next": "CheckStatusPredictor"
+    },
+    "CheckStatusPredictor": {
+      "Type": "Choice",
+      "InputPath": "$",
+      "Choices": [
+        {
+          "Variable": "$.is_active_predictor",
+          "BooleanEquals": true,
+          "Next": "CreateForecast"
+        }
+      ],
+      "Default": "SleepCheckStatusPredictor"
+    },
+    "SleepCheckStatusPredictor": {
+      "Type": "Wait",
+      "Seconds": 300,
+      "Next": "GetStatusPredictor"
+    },
+    "CreateForecast": {
+      "Type": "Task",
+      "InputPath": "$",
+      "Resource": "${CreateForecastFunctionArn}",
+      "ResultPath": "$",
+      "Next": "GetStatusForecast"
+    },
+    "GetStatusForecast": {
+      "Type": "Task",
+      "InputPath": "$",
+      "Resource": "${GetStatusForecastFunctionArn}",
+      "ResultPath": "$",
+      "Next": "CheckStatusForecast"
+    },
+    "CheckStatusForecast": {
+      "Type": "Choice",
+      "InputPath": "$",
+      "Choices": [
+        {
+          "Variable": "$.is_active_forecast",
+          "BooleanEquals": true,
+          "Next": "CreateForecastExportJob"
+        }
+      ],
+      "Default": "SleepCheckStatusForecast"
+    },
+    "SleepCheckStatusForecast": {
+      "Type": "Wait",
+      "Seconds": 300,
+      "Next": "GetStatusForecast"
+    },
+    "CreateForecastExportJob": {
+      "Type": "Task",
+      "InputPath": "$",
+      "Resource": "${CreateForecastExportJobFunctionArn}",
+      "ResultPath": "$",
+      "Next": "GetStatusForecastExportjob"
+    },
+    "GetStatusForecastExportjob": {
+      "Type": "Task",
+      "InputPath": "$",
+      "Resource": "${GetStatusForecastExportJobFunctionArn}",
+      "ResultPath": "$",
+      "Next": "CheckStatusExport"
+    },
+    "CheckStatusExport": {
+      "Type": "Choice",
+      "InputPath": "$",
+      "Choices": [
+        {
+          "Variable": "$.is_active_export",
+          "BooleanEquals": true,
+          "Next": "NotifyUser"
+        }
+      ],
+      "Default": "SleepCheckStatusExport"
+    },
+    "SleepCheckStatusExport": {
+      "Type": "Wait",
+      "Seconds": 300,
+      "Next": "GetStatusForecastExportjob"
+    },
+    "NotifyUser": {
+      "Type": "Task",
+      "InputPath": "$",
+      "Resource": "${NotifyUserFunctionArn}",
+      "ResultPath": "$",
+      "End": true
+    }
+  }
+}

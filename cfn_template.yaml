@@ -118,13 +118,13 @@ Resources:
       ManagedPolicyArns:
       - arn:aws:iam::aws:policy/AmazonSageMakerFullAccess
       - Ref: BucketsFullAccessPolicy
-      - arn:aws:iam::aws:policy/AWSLambdaFullAccess
+      - arn:aws:iam::aws:policy/AWSLambda_FullAccess
       - arn:aws:iam::aws:policy/IAMFullAccess
       - arn:aws:iam::aws:policy/AWSStepFunctionsFullAccess
       - arn:aws:iam::aws:policy/CloudWatchEventsFullAccess
       - arn:aws:iam::aws:policy/AmazonForecastFullAccess
       - arn:aws:iam::aws:policy/AWSCloudFormationFullAccess
-      - arn:aws:iam::aws:policy/AWSCloudTrailFullAccess
+      - arn:aws:iam::aws:policy/AWSCloudTrail_FullAccess
   NotebookConfig:
     Type: AWS::SageMaker::NotebookInstanceLifecycleConfig
     Properties:
@@ -179,7 +179,7 @@ Resources:
         Fn::GetAtt:
         - SageMakerNotebookRole
         - Arn
-      DefaultCodeRepository: https://github.com/glyfnet/timeseries_blog.git
+      DefaultCodeRepository: https://github.com/aws-samples/amazon-forecast-automated-sales-projections.git
   InputCloudTrailBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -197,6 +197,16 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
+        - Sid: Require Secure Transport
+          Action: "s3:*"
+          Effect: Deny
+          Resource:
+            - !Sub "arn:${AWS::Partition}:s3:::${InputCloudTrailBucket}"
+            - !Sub "arn:${AWS::Partition}:s3:::${InputCloudTrailBucket}/*"
+          Condition:
+            Bool:
+              "aws:SecureTransport": "false"
+          Principal: "*"
         - Sid: AWSCloudTrailAclCheck
           Effect: Allow
           Principal:

@@ -197,6 +197,16 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
+        - Sid: Require Secure Transport
+          Action: "s3:*"
+          Effect: Deny
+          Resource:
+            - !Sub "arn:${AWS::Partition}:s3:::${InputCloudTrailBucket}"
+            - !Sub "arn:${AWS::Partition}:s3:::${InputCloudTrailBucket}/*"
+          Condition:
+            Bool:
+              "aws:SecureTransport": "false"
+          Principal: "*"
         - Sid: AWSCloudTrailAclCheck
           Effect: Allow
           Principal:
